@@ -50,7 +50,7 @@ team_t team = {
 #define DSIZE 8
 #define CHUNkSIZE (1<<12)
 
-#define MAX(x,y) ((x) >(Y) ? (x) : (y))
+#define MAX(x,y) ((x) >(y) ? (x) : (y))
 
 #define PACK(size, alloc) ((size)|(alloc))
 
@@ -63,28 +63,82 @@ team_t team = {
 #define HDRP(bp) ((char *)(bp)-WSIZE)
 #define FTRP(bp) ((char *)(bp)+ GET_SIZE(HDRP(bp))-DSIZE)
 
-#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char*)(bp)-WSIZE)))
-#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
+#define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char*)(bp)-WSIZE))) //header읽기
+#define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) //footer읽기
 
 static char* heap_listp = NULL; //cur pointer
 
-int mm_init(void)
-{
-    // 초기 공간 확보
-    // padding|prologue|epilogue
-    
-    if((heap_listp = mem_sbrk(4*ALIGNMENT)) == (void*) -1){
-        return -1;
+
+static void* first_fit(size_t asize){ 
+    for(void * ptr = heap_listp;GET_SIZE(HDRP(ptr));ptr = NEXT_BLKP(ptr)){
+        if(!GET_ALLOC(HDRP(ptr)) && GET_SIZE(HDRP(ptr)) >= asize){
+            return ptr;
+        }
     }
-    PUT(heap_listp, 0);//padding
-    PUT(heap_listp + (WSIZE), PACK(DSIZE, 1));//prologue header
-    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));//prologue footer
-    PUT(heap_listp + (3*WSIZE), PACK(0, 1));//epilogue header
+    return NULL;
+}
+static void* best_fit(size_t asize){
+    return NULL;
+}
 
-    heap_listp+=(2*WSIZE);
+typedef enum Alg {First = 1, Best} ALG;
 
-    if(extend_heap(CHUNkSIZE/WSIZE) == NULL) return -1;
-    return 0;
+static void* find_fit(size_t asize){    
+    //change fit alg here
+    ALG mmalg = First;
+
+    void* (*fuc_ptr)(size_t);
+    switch (mmalg)
+    {
+        case First:
+            fuc_ptr = first_fit;
+            break;
+        case Best:
+            fuc_ptr = best_fit;
+            break;
+        default:
+            return NULL;
+    
+    }
+    return fuc_ptr(asize);
+
+}
+
+static void place(void *bp, size_t asize){
+    size_t oldsize = GET_SIZE(HDRP(bp));
+    if(oldsize - asize >= (2*DSIZE)){
+        //분할
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        bp = NEXT_BLKP(bp);
+        PUT(HDRP(bp), PACK(oldsize-asize, 0));
+        PUT(FTRP(bp), PACK(oldsize-asize, 0));
+    }else{
+        PUT(HDRP(bp), PACK(oldsize, 1));
+        PUT(FTRP(bp), PACK(oldsize, 1));
+    }
+}
+
+static void *coalesce(void * bp){
+    //
+    size_t pre_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    size_t size = GET_SIZE(HDRP(bp));
+
+    if (!pre_alloc) {
+    size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+    bp = PREV_BLKP(bp);
+    }
+
+    if (!next_alloc) {
+    size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    }
+
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+
+    return bp;
+    
 }
 
 static void *extend_heap(size_t words){
@@ -102,6 +156,24 @@ static void *extend_heap(size_t words){
     return coalesce(bp);
 }
 
+int mm_init(void)
+{
+    // 초기 공간 확보
+    // padding|prologue|epilogue
+    
+    if((heap_listp = mem_sbrk(4*WSIZE)) == (void*) -1){
+        return -1;
+    }
+    PUT(heap_listp, 0);//padding
+    PUT(heap_listp + (WSIZE), PACK(DSIZE, 1));//prologue header
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));//prologue footer
+    PUT(heap_listp + (3*WSIZE), PACK(0, 1));//epilogue header
+
+    heap_listp+=(2*WSIZE);
+
+    if(extend_heap(CHUNkSIZE/WSIZE) == NULL) return -1;
+    return 0;
+}
 
 
 
@@ -109,18 +181,31 @@ static void *extend_heap(size_t words){
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
+
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-        return NULL;
-    else
-    {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    size_t asize;
+    size_t extendsize;
+    char *bp;
+
+    if(size == 0) return NULL;
+
+    if(size <=DSIZE) asize = 2*DSIZE;
+    else asize = DSIZE*((size + (DSIZE) + (DSIZE -1))/DSIZE);
+
+    if((bp = find_fit(asize)) != NULL){
+        place(bp, asize);
+        return bp;
     }
+
+    extendsize = MAX(asize, CHUNkSIZE);
+    if((bp = extend_heap(extendsize/WSIZE)) == NULL) return NULL;
+    place(bp, asize);
+    return bp;
+
 }
+
+
 
 /*
  * mm_free - Freeing a block does nothing.
@@ -134,27 +219,6 @@ void mm_free(void *ptr)
     coalesce(ptr);//공간 병합
 }
 
-static void *coalesce(void * bp){
-    //
-    size_t pre_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_SIZE(HDRP(bp));
-
-    if (!pre_alloc) {
-    size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    bp = PREV_BLKP(bp);
-    }
-
-    if (!next_alloc) {
-    size += GET_SIZE(HDRP(bp));
-    }
-
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
-
-    return bp;
-    
-}
 
 /*
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
