@@ -70,7 +70,7 @@ static char* heap_listp = NULL; //cur pointer
 
 
 static void* first_fit(size_t asize){ 
-    for(void * ptr = heap_listp;GET_SIZE(HDRP(ptr));ptr = NEXT_BLKP(ptr)){
+    for(void * ptr = heap_listp; GET_SIZE(HDRP(ptr)) > 0;ptr = NEXT_BLKP(ptr)){
         if(!GET_ALLOC(HDRP(ptr)) && GET_SIZE(HDRP(ptr)) >= asize){
             return ptr;
         }
@@ -119,26 +119,43 @@ static void place(void *bp, size_t asize){
     }
 }
 
-static void *coalesce(void * bp){
-    //
-    size_t pre_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+static void *coalesce(void *bp)
+{
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
 
-    if (!pre_alloc) {
-    size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-    bp = PREV_BLKP(bp);
+    if (prev_alloc && next_alloc) {
+        return bp;
     }
 
-    if (!next_alloc) {
-    size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    else if (prev_alloc && !next_alloc) {
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
     }
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    else if (!prev_alloc && next_alloc) {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+
+        PUT(FTRP(bp), PACK(size, 0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+
+        bp = PREV_BLKP(bp);
+    }
+
+    else {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)))
+              + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+
+        bp = PREV_BLKP(bp);
+    }
 
     return bp;
-    
 }
 
 static void *extend_heap(size_t words){
@@ -228,13 +245,48 @@ void *mm_realloc(void *ptr, size_t size)
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
+    /*
+    재할당할때 비용이 드는 곳
+    원본 데이터 복사할 때 -> 최대한 움직이지 말기
+    메모리 낭비
+    먼저 free 가정하고 find?
+    진짜 없음 expend
+    */
+    size_t asize;
 
+    if (ptr == NULL)
+    return mm_malloc(size);
+
+    if(size == 0){
+        mm_free(ptr);
+        return NULL;
+    } 
+
+    if(size <=DSIZE) asize = 2*DSIZE;
+    else asize = DSIZE*((size + (DSIZE) + (DSIZE -1))/DSIZE);
+    //padding 고려시 재할당 문제 없음
+    if(GET_SIZE(HDRP(ptr)) >= asize){
+        return ptr;
+    }
+    //뒤에 가용가능한 경우
+    if(!GET_ALLOC(HDRP(NEXT_BLKP(ptr)))){
+        size_t combined_size = GET_SIZE(HDRP(ptr)) + GET_SIZE(HDRP(NEXT_BLKP(ptr)));
+        if(combined_size >= asize){
+            PUT(HDRP(ptr), PACK(combined_size, 0));
+            PUT(FTRP(ptr), PACK(combined_size, 0));
+
+            place(ptr, asize);
+            return ptr;
+        }
+    }
+    //주소 이동시켜야 할경우
     newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
-    if (size < copySize)
-        copySize = size;
+
+    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE;
+    if(size < copySize) copySize = size;
+
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
     return newptr;
