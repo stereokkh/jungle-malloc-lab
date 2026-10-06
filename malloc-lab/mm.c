@@ -112,7 +112,7 @@ typedef enum Alg {First = 1, Best, Next} ALG;
 
 static void* find_fit(size_t asize){    
     //change fit alg here
-    ALG mmalg = First;
+    ALG mmalg = Next;
     
     void* (*fuc_ptr)(size_t);
     switch (mmalg)
@@ -294,7 +294,13 @@ void *mm_realloc(void *ptr, size_t size)
     if(size <=DSIZE) asize = 2*DSIZE;
     else asize = DSIZE*((size + (DSIZE) + (DSIZE -1))/DSIZE);
 
+    //앞부분 사용 가능
+    void *next = NEXT_BLKP(ptr);
+    void *prev = PREV_BLKP(ptr);
+
     size_t oldsize = GET_SIZE(HDRP(ptr));
+
+    //현재 블록이 충분할 경우
     if(oldsize >= asize){
         size_t remain = oldsize - asize;
 
@@ -312,11 +318,18 @@ void *mm_realloc(void *ptr, size_t size)
         return ptr;
     }
 
-    //앞부분 사용 가능
-    void *next = NEXT_BLKP(ptr);
-    void *prev = PREV_BLKP(ptr);
-    
+    //heap 끝부분 확장
+    if(GET_SIZE(HDRP(next)) == 0){
+        size_t need = asize - oldsize;
 
+        if(mem_sbrk(need) != (void*)-1) {
+            PUT(HDRP(ptr), PACK(asize, 1));
+            PUT(FTRP(ptr), PACK(asize, 1));
+            PUT(HDRP(NEXT_BLKP(ptr)), PACK(0,1));
+            return ptr;
+        }
+    }
+    //next와 병합 후 제자리 확장
     if(!GET_ALLOC(HDRP(next))){
         size_t combined = oldsize + GET_SIZE(HDRP(next));
         if(combined >= asize){
@@ -326,6 +339,8 @@ void *mm_realloc(void *ptr, size_t size)
             return ptr;
         }
     }
+
+/* tradeoff 심함
     //뒤 확장
     if(!GET_ALLOC(HDRP(prev))){
         size_t combined = oldsize + GET_SIZE(HDRP(prev));
@@ -353,17 +368,8 @@ void *mm_realloc(void *ptr, size_t size)
             }
         }
     }
-    //heap 끝부분 확장
-    if(GET_SIZE(HDRP(next)) == 0){
-        size_t need = asize - oldsize;
+ */
 
-        if(mem_sbrk(need) != (void*)-1) {
-            PUT(HDRP(ptr), PACK(asize, 1));
-            PUT(FTRP(ptr), PACK(asize, 1));
-            PUT(HDRP(NEXT_BLKP(ptr)), PACK(0,1));
-            return ptr;
-        }
-    }
     //기존 정책
     void *newptr = mm_malloc(size);
 
